@@ -1,0 +1,198 @@
+# ----------------------------------------------------------
+# Farrel Azhar
+# ----------------------------------------------------------
+# UCSD School of Global Policy and Strategy, QM3 Final Poster
+# ----------------------------------------------------------
+
+# Load Packages and Data
+# ----------------------------------------------------------
+setwd() # Set your working directory
+
+library(plm)
+library(tidyverse)
+library(stargazer)
+library(wooldridge)
+library(estimatr)
+library(fixest)
+library(lmtest)
+library(sandwich)
+library(broom)
+
+# Data Load
+# ----------------------------------------------------------
+load("traffic_fat.rda")
+data = traffic_fat
+data_b = data
+
+# Initial Data Manipulation
+# ----------------------------------------------------------
+data = data %>%
+  mutate(
+    treatyear = if_else(hha > 0 & !is.na(hha), year, NA)  # Define treatment year
+  ) %>%
+  group_by(state) %>%
+  mutate(
+    mintreatyear = min(treatyear, na.rm = TRUE),  # Treatment year for each row
+    mintreatyear = if_else(is.infinite(mintreatyear), NA, mintreatyear),  # Handle untreated areas
+    treatment_group = if_else(!is.na(mintreatyear), 1, 0)  # Treatment group indicator
+  ) %>%
+  ungroup() %>%
+  mutate(
+    treat = if_else(year >= mintreatyear, 1, 0),  # Treated variable
+    tau = year - mintreatyear  # Relative treatment year
+  ) %>%
+  replace_na(list(treat = 0, tau = 0, mintreatyear = 0)) 
+
+# Check for NAs
+# ----------------------------------------------------------
+test = is.na(data)
+summary(test)
+
+# Treat vs Policy
+# ----------------------------------------------------------
+p1 = feols(totfat ~ hha | state + year, cluster = ~ state, data)
+p2 = feols(totfat ~ treat | state + year, cluster = ~ state, data)
+etable(p1, p2)  # Compare treatment and policy effects
+
+# Initial Data Preview
+# ----------------------------------------------------------
+ggplot(data, aes(x = year, y = totfat, group = state, color = state)) +
+  geom_line() +
+  xlab("Year") + ylab("Total Fatalities") +
+  geom_vline(aes(xintercept = 1990, linetype = "1990 Recession"), colour= 'red') + 
+  geom_vline(aes(xintercept = 2008, linetype = "2008 Recession"), colour= 'black') +
+  scale_linetype_manual(name = "Events", values = c(2, 2),
+                        guide = guide_legend(override.aes = list(color = c("red", "black")))) +
+  theme_bw() + ggtitle("Traffic Fatalities", "From 1983 - 2012") + 
+  labs(caption = "Figure 1: Total traffic fatalities")
+
+ggplot() +
+  geom_smooth(data = data, mapping = aes(x = year, y = totfat), method = "loess", se = FALSE)
+
+# Analysis
+# ----------------------------------------------------------
+# FE Regression for pre/post
+
+# Univariate
+# ----------------------------------------------------------
+m1 = feols(totfat ~ hha | state + year, cluster = ~ state, data)
+
+# With Control Variables
+# ----------------------------------------------------------
+m2 = feols(totfat ~ hha + totpop | state + year, cluster = ~ state, data)
+m3 = feols(totfat ~ hha + totpop + avgage | state + year, cluster = ~ state, data)
+m4 = feols(totfat ~ hha + totpop + avgage + pcinc | state + year, cluster = ~ state, data)
+m5 = feols(c(totfat, occfat, noccfat) ~ hha + totpop + avgage + pcinc + lim70 | state + year, cluster = ~ state, data)
+
+etable(m5,
+       headers = c("Total Fatality", "Total Occupant Fatality", "Total Nonoccupant Fatality"), 
+       dict = c("totfat" = "Total Fatalities", "occfat" = "Occupant Fatalities", "noccfat" = "Nonoccupant Fatalities",
+                "hha" = "Handheld Device Ban", "totpop" = "Total Population", "avgage" = "Average Age", 
+                "pcinc" = "Per-Capita Personal Income", "lim70" = "70MPH or Greater Speed Limit", 
+                "fueltax" = "Fuel Tax, Cents per Gallon", "state" = "State", "year" = "Year"), 
+       title = "Effects of Handheld Device Ban", tex = F)
+
+# Statewide Variables
+# ----------------------------------------------------------
+s1 = feols(c(totfat, occfat, noccfat) ~ hha + milrur * rurdense + milurb * urbdense | state + year, 
+           cluster = ~ state, data)
+
+etable(s1,
+       headers = c("Types of roads"), drop = c("totpop", "avgage", "pcinc", "lim70", "fueltax"),
+       dict = c("totfat" = "Total Fatalities", "hha" = "Handheld Device Ban", "milrur" = "Total length of rural roads (miles)", 
+                "milurb" = "Total length of urban roads (miles)", 
+                "rurdense" = "Density of cars in rural roads (VMT / Total Length)", 
+                "urbdense" = "Density of cars in urban roads (VMT / Total Length)",
+                "state" = "State", "year" = "Year"),
+       title = "Effects of Handheld Device Ban", tex = F)
+
+s2 = feols(c(totfat, occfat, noccfat) ~ hha + totpop + avgage + pcinc + lim70 + fueltax +
+             milrur * rurdense + milurb * urbdense | state + year, cluster = ~ state, data)
+
+etable(s2,
+       drop = c("totpop", "avgage", "pcinc", "lim70", "fueltax"),
+       dict = c("totfat" = "Total Fatalities", "occfat" = "Occupant Fatalities", 
+                "noccfat" = "Nonoccupant Fatalities", "hha" = "Handheld Device Ban", 
+                "milrur" = "Total length of rural roads (miles)", "milurb" = "Total length of urban roads (miles)", 
+                "rurdense" = "Density of cars in rural roads (VMT / Total Length)", 
+                "urbdense" = "Density of cars in urban roads (VMT / Total Length)",
+                "state" = "State", "year" = "Year"),
+       title = "Effects of Handheld Device Ban on Types of Roads with Control Variables", tex = T)
+
+# FE Regression for Different Types of Fatalities
+# ----------------------------------------------------------
+t1 = feols(totfat ~ hha + totpop + avgage + pcinc + lim70 + fueltax | state + year, cluster = ~ state, data)
+t2 = feols(occfat ~ hha + totpop + avgage + pcinc + lim70 + fueltax | state + year, cluster = ~ state, data)
+t3 = feols(noccfat ~ hha + totpop + avgage + pcinc + lim70 + fueltax | state + year, cluster = ~ state, data)
+
+etable(t1, t2, t3,
+       headers = c("Effect on Total Fatalities", "Effect on Total Occupant Fatalities", "Effect on Total Non-occupant Fatalities"), 
+       dict = c("totfat" = "Total Fatalities", "hha" = "Handheld Device Ban", 
+                "totpop" = "Total Population", "avgage" = "Average Age", 
+                "pcinc" = "Per-Capita Personal Income", "lim70" = "70MPH or Greater Speed Limit", 
+                "fueltax" = "Fuel Tax, Cents per Gallon", "state" = "State", "year" = "Year"),
+       title = "Effects of Handheld Device Ban", tex = F)
+
+# DID Regression per Year
+# ----------------------------------------------------------
+d1 = feols(totfat ~ i(tau, ref = -1) | state + year, data = data, cluster = ~ state)
+d2 = feols(totfat ~ i(tau, ref = -1) + totpop + avgage + pcinc + lim70 + fueltax | state + year, data = data, cluster = ~ state)
+
+etable(d1, d2)
+
+# Plotting Results for DID Regression
+# ----------------------------------------------------------
+iplot(d1, xlab = "Relative Handheld Device Ban Year", main = "Effect on Total Traffic Fatalities")
+iplot(d2, xlab = "Relative Handheld Device Ban Year", main = "Effect on Total Traffic Fatalities")
+
+# Sun and Abraham Estimator
+# ----------------------------------------------------------
+d3 = feols(totfat ~ sunab(mintreatyear, year) | state + year, data = data, cluster = ~ state)
+d4 = feols(totfat ~ sunab(mintreatyear, year) + totpop + avgage + pcinc + lim70 + fueltax | state + year, data = data, cluster = ~ state)
+
+etable(d3, d4)
+
+# Plotting Results for Sun and Abraham Estimator
+# ----------------------------------------------------------
+iplot(d3, xlab = "Year", main = "Effect on Total Traffic Fatalities")
+iplot(d4, xlab = "Year", main = "Effect on Total Traffic Fatalities")
+
+# ----------------------------------------------------------
+# New Regression Analysis
+# ----------------------------------------------------------
+d5 = feols(
+  totfat ~ sunab(mintreatyear, year) + 
+    totpop + avgage + pcinc + lim70 + fueltax +
+    milrur * milurb + rurdense * urbdense | state + year,
+  data = data,
+  cluster = ~ state
+)
+
+# Plotting the Results of the New Regression
+# ----------------------------------------------------------
+iplot(
+  list(d5, d4),
+  xlab = "Relative Handheld Device Ban Year",
+  main = "Effect on Total Traffic Fatalities"
+)
+
+# Analyze the Effects of the Handheld Device Ban
+# ----------------------------------------------------------
+data_c = data %>%
+  filter(treatment_group == 1) %>%  # Filter for treated group
+  group_by(tau) %>%
+  summarise(mean_fat = mean(totfat, na.rm = TRUE), .groups = "drop") %>%
+  ungroup()
+
+# Plotting Mean Traffic Fatalities Over Time Since Treatment
+# ----------------------------------------------------------
+ggplot(data_c, aes(x = tau, y = mean_fat)) +
+  geom_point() +
+  geom_smooth(method = "loess") +
+  xlab("Years Relative to Treatment") +
+  ylab("Mean Traffic Fatalities") +
+  ggtitle("Mean Traffic Fatalities Over Time Since Treatment")
+
+# End of Script
+# ----------------------------------------------------------
+
